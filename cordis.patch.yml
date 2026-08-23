@@ -1,4 +1,4 @@
 - insert:
-    - id: llm-rate-limit
+    - id: provider-rate-limit
       name: dsh-provider-rate-limit
       inject: [llm]
