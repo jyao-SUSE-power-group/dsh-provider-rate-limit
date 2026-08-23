@@ -1,7 +1,7 @@
 {
   "name": "dsh-provider-rate-limit",
   "description": "Per-provider & per-model rate limiting (token bucket, reject/queue modes) plus gateway identity rules for DeepSeek Harness",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
