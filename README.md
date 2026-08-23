@@ -16,6 +16,7 @@ Per-provider **&** per-model rate limiting for [DeepSeek Harness](https://github
 - **Gateway identity rules** — rewrite `User-Agent` / inject static headers for URLs matching a pattern (e.g. gateways that validate client identity), with a one-click **OpenCode Zen** preset
 - **Master switch** — flip `enabled` off to pass all traffic instantly, no listener re-registration
 - **Settings UI card** — full configuration from the Harness settings page, zh/en localized
+- **Stats Dashboard** — live panel below the settings card showing rejected/queued counts, avg wait time, active routes (auto-refreshes every 5s)
 - **Stats Service** — exposes `provider-rate-limit/stats` for cross-plugin telemetry (getStats, getAllStats, getAggregateStats, resetStats)
 - **O(1) route lookup** — pre-built Map for rule matching instead of linear scan
 - **Standard ULID** — 26-char Crockford base-32 IDs (48-bit big-endian time + 80-bit random)
