@@ -1,0 +1,53 @@
+{
+  "name": "dsh-provider-rate-limit",
+  "description": "Per-provider & per-model rate limiting (token bucket, reject/queue modes) plus gateway identity rules for DeepSeek Harness",
+  "version": "0.2.2",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "rate-limit",
+    "throttle",
+    "token-bucket",
+    "llm",
+    "opencode"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jyao-SUSE-power-group/dsh-provider-rate-limit.git"
+  },
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-settings": "0.1.0-rc.6",
+    "@deepseek-ai/schemastery": "^3.18.1"
+  }
+}
