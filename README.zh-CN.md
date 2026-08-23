@@ -73,8 +73,7 @@ else                             → 产出 RATE_LIMIT 结束事件（附 Retry-
 
 ```bash
 pnpm install
-node /path/to/test-rate-limit.mjs   # 行为测试：突发/补充/FIFO/中止/reject
-node /path/to/test-identity.mjs     # 身份补丁、卸载生命周期、总开关
+npm test   # node:test 套件：桶行为、FIFO、中止/reject、身份补丁、卸载生命周期、总开关
 ```
 
 ## 许可证

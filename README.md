@@ -75,8 +75,7 @@ The bucket floor is `now − (capacity − 1) × interval`, which gives classic 
 
 ```bash
 pnpm install
-node /path/to/test-rate-limit.mjs   # behavioral suite: burst/refill/FIFO/abort/reject
-node /path/to/test-identity.mjs     # identity patch, dispose lifecycle, master switch
+npm test   # node:test suite: bucket behavior, FIFO, abort/reject, identity patch, dispose, master switch
 ```
 
 ## License

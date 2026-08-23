@@ -15,6 +15,9 @@
     "lib/client.js",
     "cordis.patch.yml"
   ],
+  "scripts": {
+    "test": "node --test"
+  },
   "keywords": [
     "dsh",
     "dsh-plugin",
