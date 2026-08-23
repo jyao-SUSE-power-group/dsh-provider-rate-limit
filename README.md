@@ -16,6 +16,9 @@ Per-provider **&** per-model rate limiting for [DeepSeek Harness](https://github
 - **Gateway identity rules** — rewrite `User-Agent` / inject static headers for URLs matching a pattern (e.g. gateways that validate client identity), with a one-click **OpenCode Zen** preset
 - **Master switch** — flip `enabled` off to pass all traffic instantly, no listener re-registration
 - **Settings UI card** — full configuration from the Harness settings page, zh/en localized
+- **Stats Service** — exposes `provider-rate-limit/stats` for cross-plugin telemetry (getStats, getAllStats, getAggregateStats, resetStats)
+- **O(1) route lookup** — pre-built Map for rule matching instead of linear scan
+- **Standard ULID** — 26-char Crockford base-32 IDs (48-bit big-endian time + 80-bit random)
 
 ## Install
 
@@ -71,11 +74,38 @@ else                             → yield RATE_LIMIT finish (+ Retry-After hint
 
 The bucket floor is `now − (capacity − 1) × interval`, which gives classic burst-and-recover semantics: after idle time the bucket is implicitly full again, and resizing capacity/rate at runtime never mints a free burst.
 
+## Cross-Plugin Stats API
+
+Other plugins can query rate-limit statistics:
+
+```js
+// In a plugin's apply(ctx):
+const stats = ctx.get("provider-rate-limit/stats");
+
+// Per-route stats
+const routeStats = stats.getStats("opencode", "deepseek-v4-flash-free");
+// → { reserved, waited, totalWaitMs, rejected, avgWaitMs, peekWaitMs }
+
+// All routes
+const all = stats.getAllStats();
+// → { "opencode\u0000deepseek-v4-flash-free": {...}, ... }
+
+// Aggregate across all routes
+const agg = stats.getAggregateStats();
+// → { reserved, waited, totalWaitMs, rejected, avgWaitMs, routes }
+
+// Reset counters (for per-window accounting)
+stats.resetStats();              // all routes
+stats.resetStats("opencode", "v3"); // specific route
+```
+
 ## Development
 
 ```bash
 pnpm install
-npm test   # node:test suite: bucket behavior, FIFO, abort/reject, identity patch, dispose, master switch
+npm test   # 19 tests: bucket behavior, FIFO, abort/reject, identity patch,
+           # dispose, master switch, ULID format, stats service, multi-provider,
+           # maxWaitMs timeout, hot-update retune, error handling
 ```
 
 ## License
