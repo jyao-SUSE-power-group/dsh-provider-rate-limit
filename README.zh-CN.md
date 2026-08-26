@@ -14,17 +14,26 @@
 - **网关身份规则** —— 对匹配 URL 改写 `User-Agent` / 注入静态请求头（用于校验客户端身份的网关），内置一键 **OpenCode Zen** 预设
 - **总开关** —— `enabled` 关掉即全量直通，无需反注册监听器，即时生效
 - **设置界面卡片** —— 在 Harness 设置页完成全部配置，中英双语
+- **实时统计行** —— 聊天输入框下方的精简读数，每 5 秒自动刷新；鼠标悬停可查看各路由 provider·model 明细
+- **统计 HTTP 接口** —— `GET /api/provider-rate-limit.stats` 返回聚合与分路由计数的 JSON（供统计行使用，也可对接外部工具）
+- **跨插件统计服务** —— `provider-rate-limit/stats` 服务供进程内消费者调用（getStats、getAllStats、getAggregateStats、resetStats）
 
 ## 安装
 
-在 DSH 插件市场搜索 `dsh-provider-rate-limit`，或手动安装：
+### DSH 插件管理器（推荐）
+
+```bash
+dsh plugin --profile web add github:jyao-SUSE-power-group/dsh-provider-rate-limit
+```
+
+然后重启 DeepSeek Harness，插件会经 cordis patch 注册进 `llm` 服务。
+
+### 手动安装
 
 ```bash
 git clone https://github.com/jyao-SUSE-power-group/dsh-provider-rate-limit.git ~/.dsh/plugins/dsh-provider-rate-limit
 cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 ```
-
-然后重启 DeepSeek Harness，插件会经 cordis patch 注册进 `llm` 服务。
 
 ## 配置说明
 
@@ -56,6 +65,38 @@ fetch 补丁带引用计数、干净卸载：插件停用时恰好恢复原生 `
 
 > ⚠️ 请仅为你有权使用、且符合其服务条款的服务伪装身份。
 
+## 实时统计
+
+插件在 **composer dock**（聊天输入框下方）显示精简统计行：
+
+```
+限流统计 已拒绝 0 · 已排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
+```
+
+鼠标悬停可查看各路由 provider·model 明细。数据每 5 秒自动刷新。
+
+### HTTP 接口
+
+```
+GET /api/provider-rate-limit.stats
+```
+
+返回聚合与分路由计数的 JSON：
+
+```json
+{
+  "ok": true,
+  "value": {
+    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "avgWaitMs": 0, "routes": 3 },
+    "routes": {
+      "opencode\u0000big-pickle": { "reserved": 117, ... },
+      "opencode-vision\u0000big-pickle": { "reserved": 34, ... },
+      "amd-r\u0000DeepSeek-V4-Flash": { "reserved": 2, ... }
+    }
+  }
+}
+```
+
 ## 工作原理
 
 所有出站 LLM 流量经过唯一的 `llm/stream` 钩子（瀑布式收口点，同时覆盖 agent 循环、标题生成与压缩）。每次调用**同步预约**路由令牌桶的一个名额：
@@ -75,6 +116,22 @@ else                             → 产出 RATE_LIMIT 结束事件（附 Retry-
 pnpm install
 npm test   # node:test 套件：桶行为、FIFO、中止/reject、身份补丁、卸载生命周期、总开关
 ```
+
+## 截图
+
+### 设置卡片
+
+![设置卡片](./assets/screenshots/settings-card.png)
+
+### 设置配置
+
+| | |
+|---|---|
+| ![设置配置 1](./assets/screenshots/settings-config-1.png) | ![设置配置 2](./assets/screenshots/settings-config-2.png) |
+
+### Composer Dock 实时统计
+
+![Composer Dock 统计](./assets/screenshots/composer-dock-stats.png)
 
 ## 许可证
 

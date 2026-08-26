@@ -16,21 +16,28 @@ Per-provider **&** per-model rate limiting for [DeepSeek Harness](https://github
 - **Gateway identity rules** — rewrite `User-Agent` / inject static headers for URLs matching a pattern (e.g. gateways that validate client identity), with a one-click **OpenCode Zen** preset
 - **Master switch** — flip `enabled` off to pass all traffic instantly, no listener re-registration
 - **Settings UI card** — full configuration from the Harness settings page, zh/en localized
-- **Stats Dashboard** — live panel below the settings card showing rejected/queued counts, avg wait time, active routes (auto-refreshes every 5s)
-- **Stats Service** — exposes `provider-rate-limit/stats` for cross-plugin telemetry (getStats, getAllStats, getAggregateStats, resetStats)
+- **Live stats line** — compact readout in the composer dock (under the chat input), auto-refreshes every 5s; hover to see per-route provider·model breakdown
+- **Stats HTTP API** — `GET /api/provider-rate-limit.stats` returns aggregate and per-route counters as JSON (used by the dock line; also available for external tooling)
+- **Cross-plugin stats service** — `provider-rate-limit/stats` service for in-process consumers (getStats, getAllStats, getAggregateStats, resetStats)
 - **O(1) route lookup** — pre-built Map for rule matching instead of linear scan
 - **Standard ULID** — 26-char Crockford base-32 IDs (48-bit big-endian time + 80-bit random)
 
 ## Install
 
-From the DSH plugin market (search `dsh-provider-rate-limit`), or manually:
+### DSH plugin manager (recommended)
+
+```bash
+dsh plugin --profile web add github:jyao-SUSE-power-group/dsh-provider-rate-limit
+```
+
+Then restart DeepSeek Harness. The plugin registers itself into the `llm` service via its cordis patch.
+
+### Manual
 
 ```bash
 git clone https://github.com/jyao-SUSE-power-group/dsh-provider-rate-limit.git ~/.dsh/plugins/dsh-provider-rate-limit
 cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 ```
-
-Then restart DeepSeek Harness. The plugin registers itself into the `llm` service via its cordis patch.
 
 ## Configuration
 
@@ -75,6 +82,38 @@ else                             → yield RATE_LIMIT finish (+ Retry-After hint
 
 The bucket floor is `now − (capacity − 1) × interval`, which gives classic burst-and-recover semantics: after idle time the bucket is implicitly full again, and resizing capacity/rate at runtime never mints a free burst.
 
+## Live Stats
+
+The plugin renders a compact stats line in the **composer dock** (below the chat input):
+
+```
+限流统计 已拒绝 0 · 已排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
+```
+
+Hover over the line to see a per-route breakdown (provider·model + request count). The data refreshes every 5 seconds.
+
+### HTTP Endpoint
+
+```
+GET /api/provider-rate-limit.stats
+```
+
+Returns:
+
+```json
+{
+  "ok": true,
+  "value": {
+    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "avgWaitMs": 0, "routes": 3 },
+    "routes": {
+      "opencode\u0000big-pickle": { "reserved": 117, "waited": 0, ... },
+      "opencode-vision\u0000big-pickle": { "reserved": 34, ... },
+      "amd-r\u0000DeepSeek-V4-Flash": { "reserved": 2, ... }
+    }
+  }
+}
+```
+
 ## Cross-Plugin Stats API
 
 Other plugins can query rate-limit statistics:
@@ -108,6 +147,22 @@ npm test   # 19 tests: bucket behavior, FIFO, abort/reject, identity patch,
            # dispose, master switch, ULID format, stats service, multi-provider,
            # maxWaitMs timeout, hot-update retune, error handling
 ```
+
+## Screenshots
+
+### Settings Card
+
+![Settings Card](./assets/screenshots/settings-card.png)
+
+### Settings Configuration
+
+| | |
+|---|---|
+| ![Settings Config 1](./assets/screenshots/settings-config-1.png) | ![Settings Config 2](./assets/screenshots/settings-config-2.png) |
+
+### Composer Dock Live Stats
+
+![Composer Dock Stats](./assets/screenshots/composer-dock-stats.png)
 
 ## License
 
