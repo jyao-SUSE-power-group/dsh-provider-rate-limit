@@ -50,6 +50,8 @@ Open **Settings → 插件 → Provider Rate Limit**. All options hot-reload —
 | `burst` | `4` | Bucket capacity — how many requests may fire back-to-back |
 | `mode` | `wait` | `wait` = queue up to `maxWaitMs`; `reject` = fail fast |
 | `maxWaitMs` | `30000` | Longest queue time in `wait` mode before falling back to `reject` behavior |
+| `upstream429Backoff` | `true` | On an upstream HTTP 429 (e.g. quota exhausted), pause the route until the window passes |
+| `backoffMs` | `30000` | Fallback cooldown (ms) when the upstream 429 carries no `Retry-After` |
 | `models` | `[]` | Per-route overrides: match by provider/model substring, each with its own RPM/burst |
 
 ### Route rules
@@ -81,6 +83,10 @@ else                             → yield RATE_LIMIT finish (+ Retry-After hint
 ```
 
 The bucket floor is `now − (capacity − 1) × interval`, which gives classic burst-and-recover semantics: after idle time the bucket is implicitly full again, and resizing capacity/rate at runtime never mints a free burst.
+
+### Upstream 429 backoff
+
+When the upstream provider answers with an HTTP 429 (e.g. workspace quota exhausted), the plugin watches the finish event and, if `upstream429Backoff` is on, puts that route into a **cooldown window**. New requests to that route queue (in `wait` mode, up to `maxWaitMs`) or reject (in `reject` mode) until the window passes, so the provider isn't hammered while it's already rejecting us. The window is `providerRetryAfterMs` (from the upstream `Retry-After` header) when present, otherwise `backoffMs`. The 429 finish itself is still forwarded, so `dsh-llm-retry` can also act on it.
 
 ## Live Stats
 

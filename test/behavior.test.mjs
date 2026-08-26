@@ -333,8 +333,16 @@ test("bucket stats increment correctly across multiple requests", async () => {
   assert.ok(s.rejected >= 1, "should have at least 1 rejection due to maxWaitMs");
 });
 
-test("global rpm=0 means unlimited: requests pass without throttling", async () => {
-  const ctx = makeHooksCtx();
+test("global rpm=0 means unlimited: requests pass without throttling but still count", async () => {
+  const provided = new Map();
+  const ctx = {
+    ...makeHooksCtx(),
+    reflect: {
+      provide(name, value) {
+        provided.set(name, value);
+      },
+    },
+  };
   const hooks = ctx.hooks;
   await mod.default.apply(ctx, baseConfig({ requestsPerMinute: 0, burst: 1, mode: "wait", maxWaitMs: 60_000 }));
   let downstream = 0;
@@ -343,6 +351,7 @@ test("global rpm=0 means unlimited: requests pass without throttling", async () 
     yield { type: "text", text: "ok" };
   };
   const mw = hooks["llm/stream"].mw;
+  const stats = provided.get("provider-rate-limit/stats");
 
   const t0 = performance.now();
   await drain(mw({ provider: "p", model: "m" }, next));
@@ -350,6 +359,9 @@ test("global rpm=0 means unlimited: requests pass without throttling", async () 
   const dt = performance.now() - t0;
   assert.equal(downstream, 2);
   assert.ok(dt < 200, `rpm=0 still throttled (${dt}ms)`);
+  // Unlimited must still count total traffic so the stats line is meaningful.
+  const s = stats.getStats("p", "m");
+  assert.equal(s.reserved, 2, "unlimited route should still count reserved requests");
 });
 
 test("per-route rule still applies when global rpm=0", async () => {
@@ -388,4 +400,73 @@ test("per-route rule still applies when global rpm=0", async () => {
   const dtOpen = performance.now() - t3;
   assert.equal(downstream, 4);
   assert.ok(dtOpen < 200, `unlimited route throttled (${dtOpen}ms)`);
+});
+
+test("upstream 429 triggers cooldown so the next request queues", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0, // unlimited steady-state so only cooldown gates
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    upstream429Backoff: true,
+    backoffMs: 2000,
+  }));
+  const mw = hooks["llm/stream"].mw;
+  let calls = 0;
+  // Downstream yields an upstream 429 quota failure with a retry hint.
+  const quotaNext = async function* () {
+    calls += 1;
+    yield {
+      type: "finish",
+      reason: { kind: "error", failure: { code: "insufficient_quota", status: 429, providerRetryAfterMs: 1000 } },
+    };
+  };
+  // Downstream yields a normal success finish.
+  const okNext = async function* () {
+    calls += 1;
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+
+  // First call hits the upstream 429 and should set a cooldown (~1000ms).
+  await drain(mw({ provider: "q", model: "m" }, quotaNext));
+  assert.equal(calls, 1);
+
+  // Second call must wait out the cooldown before reaching downstream.
+  const t0 = performance.now();
+  await drain(mw({ provider: "q", model: "m" }, okNext));
+  const dt = performance.now() - t0;
+  assert.equal(calls, 2, "cooldown did not gate the follow-up request");
+  assert.ok(dt >= 900, `follow-up did not wait out cooldown (${dt}ms)`);
+});
+
+test("upstream 429 backoff can be disabled", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    upstream429Backoff: false,
+    backoffMs: 2000,
+  }));
+  const mw = hooks["llm/stream"].mw;
+  let calls = 0;
+  const quotaNext = async function* () {
+    calls += 1;
+    yield { type: "finish", reason: { kind: "error", failure: { code: "insufficient_quota", status: 429, providerRetryAfterMs: 1000 } } };
+  };
+  const okNext = async function* () {
+    calls += 1;
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+
+  await drain(mw({ provider: "q", model: "m" }, quotaNext));
+  const t0 = performance.now();
+  await drain(mw({ provider: "q", model: "m" }, okNext));
+  const dt = performance.now() - t0;
+  assert.equal(calls, 2);
+  assert.ok(dt < 300, `backoff still gated request when disabled (${dt}ms)`);
 });

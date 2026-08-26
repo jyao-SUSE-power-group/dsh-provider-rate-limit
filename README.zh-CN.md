@@ -46,6 +46,8 @@ cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 | `burst` | `4` | 桶容量 —— 允许连续瞬时发出的请求数 |
 | `mode` | `wait` | `wait` = 排队等待；`reject` = 快速失败 |
 | `maxWaitMs` | `30000` | `wait` 模式最长排队时间，超过后回落到 reject 行为 |
+| `upstream429Backoff` | `true` | 上游返回 429（如配额耗尽）时，让该路由暂停，直到窗口结束 |
+| `backoffMs` | `30000` | 上游 429 未带 `Retry-After` 时的兜底冷却时长 (ms) |
 | `models` | `[]` | 路由规则：按 provider/model 子串匹配，每条可独立设 RPM/burst |
 
 ### 路由规则
@@ -109,6 +111,10 @@ else                             → 产出 RATE_LIMIT 结束事件（附 Retry-
 ```
 
 桶的地板值为 `now − (capacity − 1) × interval`，呈现经典的「突发 + 自恢复」语义：空闲一段时间后桶自动回满；运行时调整容量/速率也绝不凭空发放免费突发额度。
+
+### 上游 429 自动降速
+
+当上游返回 HTTP 429（如 workspace 配额耗尽）时，插件会捕获该结束事件，并在 `upstream429Backoff` 开启时让该路由进入**冷却窗口**。窗口内新请求在 `wait` 模式下排队（最多 `maxWaitMs`）、在 `reject` 模式下直接拒绝，直到窗口结束 —— 避免在供应商已经拒绝我们的时候继续猛打。窗口时长优先取上游 `Retry-After` 头（即 `providerRetryAfterMs`），否则用 `backoffMs` 兜底。429 结束事件本身仍会透传，`dsh-llm-retry` 也可以据此重试。
 
 ## 开发
 
