@@ -42,7 +42,7 @@ cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | `enabled` | `true` | 总开关；关闭后所有流量直通 |
-| `requestsPerMinute` | `20` | 全局稳态速率（无路由规则命中时生效） |
+| `requestsPerMinute` | `20` | 全局稳态速率（无路由规则命中时生效）；`0` = 不限速 |
 | `burst` | `4` | 桶容量 —— 允许连续瞬时发出的请求数 |
 | `mode` | `wait` | `wait` = 排队等待；`reject` = 快速失败 |
 | `maxWaitMs` | `30000` | `wait` 模式最长排队时间，超过后回落到 reject 行为 |

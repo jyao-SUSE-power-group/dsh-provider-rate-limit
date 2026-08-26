@@ -332,3 +332,60 @@ test("bucket stats increment correctly across multiple requests", async () => {
   assert.ok(s.totalWaitMs >= 4000, `should have accumulated significant wait time, got ${s.totalWaitMs}ms`);
   assert.ok(s.rejected >= 1, "should have at least 1 rejection due to maxWaitMs");
 });
+
+test("global rpm=0 means unlimited: requests pass without throttling", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({ requestsPerMinute: 0, burst: 1, mode: "wait", maxWaitMs: 60_000 }));
+  let downstream = 0;
+  const next = async function* () {
+    downstream += 1;
+    yield { type: "text", text: "ok" };
+  };
+  const mw = hooks["llm/stream"].mw;
+
+  const t0 = performance.now();
+  await drain(mw({ provider: "p", model: "m" }, next));
+  await drain(mw({ provider: "p", model: "m" }, next));
+  const dt = performance.now() - t0;
+  assert.equal(downstream, 2);
+  assert.ok(dt < 200, `rpm=0 still throttled (${dt}ms)`);
+});
+
+test("per-route rule still applies when global rpm=0", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0, // global unlimited
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    models: [{ provider: "limited", model: "", requestsPerMinute: 2, burst: 1 }],
+  }));
+  let downstream = 0;
+  const next = async function* () {
+    downstream += 1;
+    yield { type: "text", text: "ok" };
+  };
+  const mw = hooks["llm/stream"].mw;
+
+  // Route with a rule is still throttled: first burst passes, second waits.
+  const t0 = performance.now();
+  await drain(mw({ provider: "limited", model: "m" }, next));
+  const t1 = performance.now() - t0;
+  assert.equal(downstream, 1);
+  assert.ok(t1 < 200, `route burst pass took ${t1}ms`);
+  const t2 = performance.now();
+  await drain(mw({ provider: "limited", model: "m" }, next));
+  const dtRule = performance.now() - t2;
+  assert.equal(downstream, 2);
+  assert.ok(dtRule >= 900, `rule-limited route did not wait (${dtRule}ms)`);
+
+  // Route without a rule rides the global 0 → unlimited.
+  const t3 = performance.now();
+  await drain(mw({ provider: "open", model: "m" }, next));
+  await drain(mw({ provider: "open", model: "m" }, next));
+  const dtOpen = performance.now() - t3;
+  assert.equal(downstream, 4);
+  assert.ok(dtOpen < 200, `unlimited route throttled (${dtOpen}ms)`);
+});

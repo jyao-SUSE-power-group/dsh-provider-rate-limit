@@ -21,7 +21,22 @@ export function makeHooksCtx(extra = {}) {
     get() {
       return undefined;
     },
-    inject() {},
+    inject(deps, cb) {
+      // Emulate a real cordis settings service so installSettingsSection's
+      // initial onChange() fires, building the route rules map from the config
+      // passed to apply(). In production DSH the host provides this; the test
+      // fakes it so per-route (models) rules take effect immediately.
+      if (deps && deps.includes("settings")) {
+        const scope = { value: null, get() { return this.value; }, watch() {} };
+        const settings = {
+          register(_ns, _schema, opts) {
+            scope.value = opts.base;
+            return scope;
+          },
+        };
+        cb({ settings, effect: (fn) => { const r = fn(); if (typeof r === "function") r.disposer = true; } });
+      }
+    },
     // Real cordis calls fn immediately and treats a returned function as the
     // disposable (see cordis _execute); emulate that so dispose paths work.
     effect(fn) {

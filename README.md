@@ -46,7 +46,7 @@ Open **Settings → 插件 → Provider Rate Limit**. All options hot-reload —
 | Option | Default | Description |
 |---|---|---|
 | `enabled` | `true` | Master switch; `false` passes everything untouched |
-| `requestsPerMinute` | `20` | Global steady-state rate (applies when no route rule matches) |
+| `requestsPerMinute` | `20` | Global steady-state rate (applies when no route rule matches); `0` = unlimited |
 | `burst` | `4` | Bucket capacity — how many requests may fire back-to-back |
 | `mode` | `wait` | `wait` = queue up to `maxWaitMs`; `reject` = fail fast |
 | `maxWaitMs` | `30000` | Longest queue time in `wait` mode before falling back to `reject` behavior |
