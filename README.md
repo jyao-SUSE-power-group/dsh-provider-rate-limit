@@ -51,7 +51,10 @@ Open **Settings → 插件 → Provider Rate Limit**. All options hot-reload —
 | `mode` | `wait` | `wait` = queue up to `maxWaitMs`; `reject` = fail fast |
 | `maxWaitMs` | `30000` | Longest queue time in `wait` mode before falling back to `reject` behavior |
 | `upstream429Backoff` | `true` | On an upstream HTTP 429 (e.g. quota exhausted), pause the route until the window passes |
-| `backoffMs` | `30000` | Fallback cooldown (ms) when the upstream 429 carries no `Retry-After` |
+| `backoffMs` | `30000` | Initial cooldown (ms) when the upstream 429 carries no `Retry-After`; doubles on consecutive 429s up to `maxBackoffMs` |
+| `maxBackoffMs` | `0` | Maximum cooldown ceiling (ms) for exponential backoff; `0` = fixed cooldown (same as `backoffMs`) |
+| `backoffJitter` | `0` | Symmetric jitter ratio (0–1) applied to the cooldown to prevent thundering herd; `0` = deterministic |
+| `maxConcurrentRequests` | `0` | Maximum in-flight requests per route; `0` = unlimited concurrency |
 | `models` | `[]` | Per-route overrides: match by provider/model substring, each with its own RPM/burst |
 
 ### Route rules
@@ -86,7 +89,11 @@ The bucket floor is `now − (capacity − 1) × interval`, which gives classic 
 
 ### Upstream 429 backoff
 
-When the upstream provider answers with an HTTP 429 (e.g. workspace quota exhausted), the plugin watches the finish event and, if `upstream429Backoff` is on, puts that route into a **cooldown window**. New requests to that route queue (in `wait` mode, up to `maxWaitMs`) or reject (in `reject` mode) until the window passes, so the provider isn't hammered while it's already rejecting us. The window is `providerRetryAfterMs` (from the upstream `Retry-After` header) when present, otherwise `backoffMs`. The 429 finish itself is still forwarded, so `dsh-llm-retry` can also act on it.
+When the upstream provider answers with an HTTP 429 (e.g. workspace quota exhausted), the plugin watches the finish event and, if `upstream429Backoff` is on, puts that route into a **cooldown window**. New requests to that route queue (in `wait` mode, up to `maxWaitMs`) or reject (in `reject` mode) until the window passes, so the provider isn't hammered while it's already rejecting us. The window is `providerRetryAfterMs` (from the upstream `Retry-After` header) when present; otherwise `backoffMs` is used as the initial delay. On consecutive 429s without an intervening success, the delay doubles each time (exponential backoff), capped at `maxBackoffMs`. A symmetric `backoffJitter` ratio randomises the final value to prevent thundering herd. A successful (non-429) finish resets the backoff counter back to the base delay. The 429 finish itself is still forwarded, so `dsh-llm-retry` can also act on it.
+
+### Concurrency limiting
+
+When `maxConcurrentRequests > 0`, the plugin additionally gates how many requests to a route may be in flight simultaneously. Requests that pass the RPM check but find all concurrency slots occupied wait (polling every 100 ms) until a slot frees up. This prevents a burst of parallel agents or subagents from overwhelming a provider even when individual RPM limits haven't been reached. `0` means unlimited concurrency (only RPM throttles).
 
 ## Live Stats
 

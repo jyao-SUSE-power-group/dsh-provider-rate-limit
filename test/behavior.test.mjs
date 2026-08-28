@@ -470,3 +470,158 @@ test("upstream 429 backoff can be disabled", async () => {
   assert.equal(calls, 2);
   assert.ok(dt < 300, `backoff still gated request when disabled (${dt}ms)`);
 });
+
+test("consecutive upstream 429s back off exponentially", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    upstream429Backoff: true,
+    backoffMs: 100,
+    maxBackoffMs: 800,
+    backoffJitter: 0, // deterministic for testing
+  }));
+  const mw = hooks["llm/stream"].mw;
+  const quotaNext = async function* () {
+    yield { type: "finish", reason: { kind: "error", failure: { code: "quota", status: 429 } } };
+  };
+
+  // 1st 429 → cool(100ms), consecutiveFails=1
+  await drain(mw({ provider: "e", model: "m" }, quotaNext));
+
+  // 2nd call waits ~100ms (cool from 1st), then 429 → cool(200ms), fails=2
+  let t = performance.now();
+  await drain(mw({ provider: "e", model: "m" }, quotaNext));
+  let dt = performance.now() - t;
+  assert.ok(dt >= 80 && dt < 250, `second backoff ${dt}ms, expected ~100`);
+
+  // 3rd call waits ~200ms (cool from 2nd), then 429 → cool(400ms), fails=3
+  t = performance.now();
+  await drain(mw({ provider: "e", model: "m" }, quotaNext));
+  dt = performance.now() - t;
+  assert.ok(dt >= 180 && dt < 450, `third backoff ${dt}ms, expected ~200`);
+
+  // 4th call waits ~400ms (cool from 3rd)
+  t = performance.now();
+  await drain(mw({ provider: "e", model: "m" }, quotaNext));
+  dt = performance.now() - t;
+  assert.ok(dt >= 380 && dt < 850, `fourth backoff ${dt}ms, expected ~400`);
+});
+
+test("backoff resets on a successful response", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    upstream429Backoff: true,
+    backoffMs: 200,
+    maxBackoffMs: 1600,
+    backoffJitter: 0,
+  }));
+  const mw = hooks["llm/stream"].mw;
+  const quotaNext = async function* () {
+    yield { type: "finish", reason: { kind: "error", failure: { code: "quota", status: 429 } } };
+  };
+  const okNext = async function* () {
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+
+  // Two 429s → consecutiveFails=2, cool from 2nd = 200*2^1 = 400ms
+  await drain(mw({ provider: "f", model: "m" }, quotaNext));
+  await drain(mw({ provider: "f", model: "m" }, quotaNext));
+
+  // Success resets consecutiveFails; next 429 starts from base (200ms)
+  // Must wait out the 400ms cooldown from the 2nd 429 before okNext runs.
+  await drain(mw({ provider: "f", model: "m" }, okNext));
+
+  // Next 429 applies 200*2^0=200ms cooldown (reset worked).
+  await drain(mw({ provider: "f", model: "m" }, quotaNext));
+
+  // The FOLLOWING request measures the cooldown set by the reset 429.
+  // Should be ~200ms (base), not 400ms+ (un-reset backoff).
+  const t0 = performance.now();
+  await drain(mw({ provider: "f", model: "m" }, okNext));
+  const dt = performance.now() - t0;
+  assert.ok(dt >= 180 && dt < 400, `backoff after reset ${dt}ms, expected ~200`);
+});
+
+test("maxConcurrentRequests gates in-flight requests", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    maxConcurrentRequests: 1,
+  }));
+  const mw = hooks["llm/stream"].mw;
+
+  // First request: keep it in flight with a gate.
+  let releaseFirst;
+  const firstGate = new Promise((r) => { releaseFirst = r; });
+  const slowNext = async function* () {
+    yield { type: "text", text: "a" };
+    await firstGate;
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+
+  // Start first request and let it acquire the concurrency slot.
+  const firstPromise = drain(mw({ provider: "c", model: "m" }, slowNext));
+  await sleep(50);
+
+  // Second request: should be blocked by concurrency.
+  let secondDone = false;
+  let secondCalls = 0;
+  const okNext = async function* () {
+    secondCalls += 1;
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+  const secondPromise = (async () => {
+    await drain(mw({ provider: "c", model: "m" }, okNext));
+    secondDone = true;
+  })();
+
+  await sleep(200);
+  assert.equal(secondDone, false, "second request should be blocked while first is in-flight");
+  assert.equal(secondCalls, 0, "downstream should not have been called");
+
+  // Release the first request; second should now proceed.
+  releaseFirst();
+  await Promise.all([firstPromise, secondPromise]);
+  assert.equal(secondDone, true, "second request should complete after first finishes");
+  assert.equal(secondCalls, 1, "second request downstream should have been called exactly once");
+});
+
+test("maxConcurrentRequests=0 allows unlimited concurrency", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    maxConcurrentRequests: 0, // unlimited
+  }));
+  const mw = hooks["llm/stream"].mw;
+
+  let count = 0;
+  const countNext = async function* () {
+    const id = ++count;
+    yield { type: "text", text: String(id) };
+    yield { type: "finish", reason: { kind: "ok" } };
+  };
+
+  // Fire 5 concurrent requests — all should proceed immediately.
+  const results = await Promise.all(
+    [1, 2, 3, 4, 5].map((i) => drain(mw({ provider: "u", model: "m" }, countNext)))
+  );
+  assert.equal(results.length, 5, "all 5 requests should complete");
+  assert.equal(count, 5, "all 5 downstreams should have been called");
+});

@@ -47,7 +47,10 @@ cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 | `mode` | `wait` | `wait` = 排队等待；`reject` = 快速失败 |
 | `maxWaitMs` | `30000` | `wait` 模式最长排队时间，超过后回落到 reject 行为 |
 | `upstream429Backoff` | `true` | 上游返回 429（如配额耗尽）时，让该路由暂停，直到窗口结束 |
-| `backoffMs` | `30000` | 上游 429 未带 `Retry-After` 时的兜底冷却时长 (ms) |
+| `backoffMs` | `30000` | 上游 429 未带 `Retry-After` 时的初始冷却时长 (ms)；连续 429 会指数递增至 `maxBackoffMs` |
+| `maxBackoffMs` | `0` | 指数退避的冷却上限 (ms)；`0` = 固定冷却（同 `backoffMs`）|
+| `backoffJitter` | `0` | 冷却抖动比例 (0–1)，防止惊群效应；`0` = 确定性延迟 |
+| `maxConcurrentRequests` | `0` | 每路由同时在飞的最大请求数；`0` = 不限并发 |
 | `models` | `[]` | 路由规则：按 provider/model 子串匹配，每条可独立设 RPM/burst |
 
 ### 路由规则
@@ -114,7 +117,11 @@ else                             → 产出 RATE_LIMIT 结束事件（附 Retry-
 
 ### 上游 429 自动降速
 
-当上游返回 HTTP 429（如 workspace 配额耗尽）时，插件会捕获该结束事件，并在 `upstream429Backoff` 开启时让该路由进入**冷却窗口**。窗口内新请求在 `wait` 模式下排队（最多 `maxWaitMs`）、在 `reject` 模式下直接拒绝，直到窗口结束 —— 避免在供应商已经拒绝我们的时候继续猛打。窗口时长优先取上游 `Retry-After` 头（即 `providerRetryAfterMs`），否则用 `backoffMs` 兜底。429 结束事件本身仍会透传，`dsh-llm-retry` 也可以据此重试。
+当上游返回 HTTP 429（如 workspace 配额耗尽）时，插件会捕获该结束事件，并在 `upstream429Backoff` 开启时让该路由进入**冷却窗口**。窗口内新请求在 `wait` 模式下排队（最多 `maxWaitMs`）、在 `reject` 模式下直接拒绝，直到窗口结束 —— 避免在供应商已经拒绝我们的时候继续猛打。窗口时长优先取上游 `Retry-After` 头（即 `providerRetryAfterMs`），否则用 `backoffMs` 作为初始冷却。连续 429（中间无成功响应）会使冷却时间指数递增（×2），上限为 `maxBackoffMs`；`backoffJitter` 可添加随机偏移防止惊群效应。成功响应（非 429）会将退避计数器重置为初始值。429 结束事件本身仍会透传，`dsh-llm-retry` 也可以据此重试。
+
+### 并发限制
+
+当 `maxConcurrentRequests > 0` 时，插件还会限制每个路由同时在飞的请求数。通过了 RPM 检查但发现并发槽已满的请求会每 100ms 轮询一次，等待槽位释放。这可以防止多个并行 agent 或子 agent 单独突破 RPM 限制但合计压垮供应商。`0` = 不限并发（仅 RPM 限流）。
 
 ## 开发
 
