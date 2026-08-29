@@ -48,7 +48,7 @@ cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 | `maxWaitMs` | `30000` | `wait` 模式最长排队时间，超过后回落到 reject 行为 |
 | `upstream429Backoff` | `true` | 上游返回 429（如配额耗尽）时，让该路由暂停，直到窗口结束 |
 | `backoffMs` | `30000` | 上游 429 未带 `Retry-After` 时的初始冷却时长 (ms)；连续 429 会指数递增至 `maxBackoffMs` |
-| `maxBackoffMs` | `0` | 指数退避的冷却上限 (ms)；`0` = 固定冷却（同 `backoffMs`）|
+| `maxBackoffMs` | `60000` | 指数退避的冷却上限 (ms)；`0` = 固定冷却（同 `backoffMs`）|
 | `backoffJitter` | `0` | 冷却抖动比例 (0–1)，防止惊群效应；`0` = 确定性延迟 |
 | `maxConcurrentRequests` | `0` | 每路由同时在飞的最大请求数；`0` = 不限并发 |
 | `models` | `[]` | 路由规则：按 provider/model 子串匹配，每条可独立设 RPM/burst |
