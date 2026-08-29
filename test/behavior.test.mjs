@@ -333,6 +333,40 @@ test("bucket stats increment correctly across multiple requests", async () => {
   assert.ok(s.rejected >= 1, "should have at least 1 rejection due to maxWaitMs");
 });
 
+test("queuedNow tracks live queue depth, not just cumulative waited", async () => {
+  const provided = new Map();
+  const ctx = {
+    ...makeHooksCtx(),
+    reflect: {
+      provide(name, value) {
+        provided.set(name, value);
+      },
+    },
+  };
+  // RPM=2 with burst=1 → token refill every 30s, so the 2nd request queues
+  // long enough to observe the live gauge before aborting.
+  await mod.default.apply(ctx, baseConfig({ requestsPerMinute: 2, burst: 1, mode: "wait", maxWaitMs: 60_000 }));
+  const mw = ctx.hooks["llm/stream"].mw;
+  const stats = provided.get("provider-rate-limit/stats");
+
+  // First request consumes the burst slot and passes instantly.
+  const ac = new AbortController();
+  await drain(mw({ provider: "live", model: "m1", signal: ac.signal }, async function* () { yield {}; }));
+
+  // Fire the second request: it must queue ~30s. drain() suspends inside the
+  // middleware's queueDelay, so after this line the gauge is already bumped.
+  const queued = drain(mw({ provider: "live", model: "m1", signal: ac.signal }, async function* () { yield {}; }));
+  const mid = stats.getStats("live", "m1");
+  assert.equal(mid.queuedNow, 1, "live queue depth should be 1 while the request waits");
+  assert.equal(mid.waited, 1, "cumulative waited should count the queued request");
+
+  // Abort the wait: the finally in queueDelay must decrement the gauge.
+  ac.abort();
+  await queued;
+  const after = stats.getStats("live", "m1");
+  assert.equal(after.queuedNow, 0, "queuedNow must return to 0 after the wait ends");
+});
+
 test("global rpm=0 means unlimited: requests pass without throttling but still count", async () => {
   const provided = new Map();
   const ctx = {
