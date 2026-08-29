@@ -3,6 +3,15 @@
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- Live `queuedNow` gauge: real-time queue depth in per-route and aggregate stats (not reset by `resetStats`; returns to `0` the moment a wait ends).
+- SSE push endpoint `/api/provider-rate-limit.events`: streams a fresh stats snapshot on every counter change with a 15 s heartbeat, replacing 5 s client polling. Client falls back to a 30 s poll only if the stream drops.
+
+### Changed
+- Settings card primary value now shows live queue depth (`当前排队`) with the cumulative count (`累计排队`) as the sub-line; composer dock subscribes to the reactive stats store instead of a 1 s local tick.
+
 ## [0.2.2] - 2026-08-23
 
 ### Changed

@@ -16,7 +16,8 @@ Per-provider **&** per-model rate limiting for [DeepSeek Harness](https://github
 - **Gateway identity rules** — rewrite `User-Agent` / inject static headers for URLs matching a pattern (e.g. gateways that validate client identity), with a one-click **OpenCode Zen** preset
 - **Master switch** — flip `enabled` off to pass all traffic instantly, no listener re-registration
 - **Settings UI card** — full configuration from the Harness settings page, zh/en localized
-- **Live stats line** — compact readout in the composer dock (under the chat input), auto-refreshes every 5s; hover to see per-route provider·model breakdown
+- **Live stats line** — compact readout in the composer dock (under the chat input), SSE-pushed in real time (no polling); hover to see per-route provider·model breakdown
+- **SSE push endpoint** — `GET /api/provider-rate-limit.events` streams a fresh stats snapshot every time counters change, with a 15 s heartbeat and automatic reconnection
 - **Stats HTTP API** — `GET /api/provider-rate-limit.stats` returns aggregate and per-route counters as JSON (used by the dock line; also available for external tooling)
 - **Cross-plugin stats service** — `provider-rate-limit/stats` service for in-process consumers (getStats, getAllStats, getAggregateStats, resetStats)
 - **O(1) route lookup** — pre-built Map for rule matching instead of linear scan
@@ -100,12 +101,27 @@ When `maxConcurrentRequests > 0`, the plugin additionally gates how many request
 The plugin renders a compact stats line in the **composer dock** (below the chat input):
 
 ```
-限流统计 已拒绝 0 · 已排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
+限流统计 已拒绝 0 · 当前排队 0 · 累计排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
 ```
 
-Hover over the line to see a per-route breakdown (provider·model + request count). The data refreshes every 5 seconds.
+Hover over the line to see a per-route breakdown (provider·model + request count). The data is pushed in real time over SSE — the dock subscribes to the reactive stats store, so numbers jump the moment a request queues, rejects, or completes. No polling timers are involved; a 30 s fallback poll only kicks in if the SSE connection drops.
 
-### HTTP Endpoint
+### Push Endpoint (SSE)
+
+```
+GET /api/provider-rate-limit.events
+```
+
+A Server-Sent Events stream. Each frame is a complete stats snapshot:
+
+```text
+data: {"aggregate":{"reserved":153,"waited":0,"totalWaitMs":0,"rejected":0,"queuedNow":0,"avgWaitMs":0,"routes":3},"routes":{...}}
+
+```
+
+A snapshot is sent immediately on connect, then again whenever counters move (request reserved, queue depth changed, request rejected or completed). The server also emits a `: ping` comment every 15 s to keep the connection alive through proxies.
+
+### Stats HTTP API
 
 ```
 GET /api/provider-rate-limit.stats
@@ -117,15 +133,17 @@ Returns:
 {
   "ok": true,
   "value": {
-    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "avgWaitMs": 0, "routes": 3 },
+    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "queuedNow": 0, "avgWaitMs": 0, "routes": 3 },
     "routes": {
-      "opencode\u0000big-pickle": { "reserved": 117, "waited": 0, ... },
+      "opencode\u0000big-pickle": { "reserved": 117, "waited": 0, "queuedNow": 0, ... },
       "opencode-vision\u0000big-pickle": { "reserved": 34, ... },
       "amd-r\u0000DeepSeek-V4-Flash": { "reserved": 2, ... }
     }
   }
 }
 ```
+
+`queuedNow` is the **live queue depth** — how many requests are currently waiting in the rate-limit queue this instant (back to `0` as soon as the wait ends). `waited` remains the cumulative counter; the settings card shows both.
 
 ## Cross-Plugin Stats API
 
@@ -137,7 +155,7 @@ const stats = ctx.get("provider-rate-limit/stats");
 
 // Per-route stats
 const routeStats = stats.getStats("opencode", "deepseek-v4-flash-free");
-// → { reserved, waited, totalWaitMs, rejected, avgWaitMs, peekWaitMs }
+// → { reserved, waited, totalWaitMs, rejected, queuedNow, avgWaitMs, peekWaitMs }
 
 // All routes
 const all = stats.getAllStats();
@@ -145,7 +163,7 @@ const all = stats.getAllStats();
 
 // Aggregate across all routes
 const agg = stats.getAggregateStats();
-// → { reserved, waited, totalWaitMs, rejected, avgWaitMs, routes }
+// → { reserved, waited, totalWaitMs, rejected, queuedNow, avgWaitMs, routes }
 
 // Reset counters (for per-window accounting)
 stats.resetStats();              // all routes
@@ -156,9 +174,9 @@ stats.resetStats("opencode", "v3"); // specific route
 
 ```bash
 pnpm install
-npm test   # 19 tests: bucket behavior, FIFO, abort/reject, identity patch,
+npm test   # 23 tests: bucket behavior, FIFO, abort/reject, identity patch,
            # dispose, master switch, ULID format, stats service, multi-provider,
-           # maxWaitMs timeout, hot-update retune, error handling
+           # maxWaitMs timeout, hot-update retune, queuedNow gauge, error handling
 ```
 
 ## Screenshots

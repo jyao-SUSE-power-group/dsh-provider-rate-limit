@@ -14,7 +14,8 @@
 - **网关身份规则** —— 对匹配 URL 改写 `User-Agent` / 注入静态请求头（用于校验客户端身份的网关），内置一键 **OpenCode Zen** 预设
 - **总开关** —— `enabled` 关掉即全量直通，无需反注册监听器，即时生效
 - **设置界面卡片** —— 在 Harness 设置页完成全部配置，中英双语
-- **实时统计行** —— 聊天输入框下方的精简读数，每 5 秒自动刷新；鼠标悬停可查看各路由 provider·model 明细
+- **实时统计行** —— 聊天输入框下方的精简读数，通过 SSE **实时推送**（无轮询）；鼠标悬停可查看各路由 provider·model 明细
+- **SSE 推送接口** —— `GET /api/provider-rate-limit.events` 每次计数变化即推送最新快照，带 15s 心跳与自动重连
 - **统计 HTTP 接口** —— `GET /api/provider-rate-limit.stats` 返回聚合与分路由计数的 JSON（供统计行使用，也可对接外部工具）
 - **跨插件统计服务** —— `provider-rate-limit/stats` 服务供进程内消费者调用（getStats、getAllStats、getAggregateStats、resetStats）
 
@@ -75,10 +76,25 @@ fetch 补丁带引用计数、干净卸载：插件停用时恰好恢复原生 `
 插件在 **composer dock**（聊天输入框下方）显示精简统计行：
 
 ```
-限流统计 已拒绝 0 · 已排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
+限流统计 已拒绝 0 · 当前排队 0 · 累计排队 0 · 平均等待 — · 总请求 153 · 活跃路由 3
 ```
 
-鼠标悬停可查看各路由 provider·model 明细。数据每 5 秒自动刷新。
+鼠标悬停可查看各路由 provider·model 明细。数据通过 SSE **实时推送** —— dock 订阅响应式统计 store，请求排队、被拒或完成时数字即时跳动，全程无轮询定时器；仅当 SSE 连接断开时才启用 30 秒兜底轮询。
+
+### SSE 推送接口
+
+```
+GET /api/provider-rate-limit.events
+```
+
+Server-Sent Events 流，每一帧都是一份完整统计快照：
+
+```text
+data: {"aggregate":{"reserved":153,"waited":0,"totalWaitMs":0,"rejected":0,"queuedNow":0,"avgWaitMs":0,"routes":3},"routes":{...}}
+
+```
+
+连接建立时立即发送一帧，此后每次计数变化（请求预约、队列深度变化、请求被拒或完成）都会再推一帧。服务端每 15 秒发一条 `: ping` 注释维持代理环境下的连接存活。
 
 ### HTTP 接口
 
@@ -92,15 +108,17 @@ GET /api/provider-rate-limit.stats
 {
   "ok": true,
   "value": {
-    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "avgWaitMs": 0, "routes": 3 },
+    "aggregate": { "reserved": 153, "waited": 0, "totalWaitMs": 0, "rejected": 0, "queuedNow": 0, "avgWaitMs": 0, "routes": 3 },
     "routes": {
-      "opencode\u0000big-pickle": { "reserved": 117, ... },
+      "opencode\u0000big-pickle": { "reserved": 117, "waited": 0, "queuedNow": 0, ... },
       "opencode-vision\u0000big-pickle": { "reserved": 34, ... },
       "amd-r\u0000DeepSeek-V4-Flash": { "reserved": 2, ... }
     }
   }
 }
 ```
+
+`queuedNow` 是**当前正在排队的请求数**（实时值，等待一结束立即回 0）；`waited` 仍是累计计数。设置卡片两者同时显示。
 
 ## 工作原理
 
@@ -127,7 +145,7 @@ else                             → 产出 RATE_LIMIT 结束事件（附 Retry-
 
 ```bash
 pnpm install
-npm test   # node:test 套件：桶行为、FIFO、中止/reject、身份补丁、卸载生命周期、总开关
+npm test   # node:test 套件：桶行为、FIFO、中止/reject、身份补丁、卸载生命周期、总开关、queuedNow gauge
 ```
 
 ## 截图
