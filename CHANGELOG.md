@@ -11,6 +11,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - Settings card primary value now shows live queue depth (`当前排队`) with the cumulative count (`累计排队`) as the sub-line; composer dock subscribes to the reactive stats store instead of a 1 s local tick.
+- Default `maxBackoffMs` changed from `0` (disabled) to `60000` (60 s); setting `0` explicitly now restores the old fixed-cooldown behavior.
+- Per-route exponential backoff with jitter on upstream 429; per-route `maxConcurrentRequests` concurrency gate.
+- Model dropdown in per-route settings UI (`modelOptions` injected from DSH model registry).
+- `rpm = 0` means unlimited for a route while per-route rules remain effective.
+
+### Fixed
+- **DSH 0.1.2-alpha.2+ compatibility** (`dsh-client-store` migration):
+  - `createSnapshotStore` now receives a plain initial value instead of a lazy getter (the old `dsh-client-runtime` accepted `() => value`; `dsh-client-store` does not).
+  - Composer stats dock `subscribe` callback is notify-only (no payload) — the handler calls `getSnapshot()` to pull the fresh snapshot, matching every in-tree DSH consumer pattern.
+- `rpm = 0` no longer bypasses per-route rules; `0` is now the explicit "unlimited" sentinel.
+
+### Deprecated
+- `dsh-client-runtime` package support: requires `@deepseek-ai/dsh >=0.1.2-alpha.2` (peer dependency now declared).
 
 ## [0.2.2] - 2026-08-23
 
