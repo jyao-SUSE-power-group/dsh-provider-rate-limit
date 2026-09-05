@@ -94,7 +94,7 @@ When the upstream provider answers with an HTTP 429 (e.g. workspace quota exhaus
 
 ### Concurrency limiting
 
-When `maxConcurrentRequests > 0`, the plugin additionally gates how many requests to a route may be in flight simultaneously. Requests that pass the RPM check but find all concurrency slots occupied wait (polling every 100 ms) until a slot frees up. This prevents a burst of parallel agents or subagents from overwhelming a provider even when individual RPM limits haven't been reached. `0` means unlimited concurrency (only RPM throttles).
+When `maxConcurrentRequests > 0`, the plugin additionally gates how many requests to a route may be in flight simultaneously. Requests that pass the RPM check but find all concurrency slots occupied join a FIFO slot queue and are granted the instant a predecessor releases — no polling, strict arrival order. This prevents a burst of parallel agents or subagents from overwhelming a provider even when individual RPM limits haven't been reached. `0` means unlimited concurrency (only RPM throttles).
 
 ## Live Stats
 
@@ -174,9 +174,10 @@ stats.resetStats("opencode", "v3"); // specific route
 
 ```bash
 pnpm install
-npm test   # 23 tests: bucket behavior, FIFO, abort/reject, identity patch,
-           # dispose, master switch, ULID format, stats service, multi-provider,
-           # maxWaitMs timeout, hot-update retune, queuedNow gauge, error handling
+npm test   # 31 tests: bucket behavior, FIFO, abort/reject, identity patch,
+           # dispose, master switch, ULID format & uniqueness, stats service,
+           # multi-provider, maxWaitMs timeout, hot-update retune, queuedNow
+           # gauge, error handling, concurrency FIFO, legacy settings provider
 ```
 
 ## Screenshots

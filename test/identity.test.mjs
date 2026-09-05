@@ -47,7 +47,7 @@ test("matching URL gets UA rewrite and custom headers", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = spyFetch;
   try {
-    const { ctx } = makeDisposerCtx();
+    const { ctx, disposers } = makeDisposerCtx();
     await mod.default.apply(ctx, identityConfig());
     await globalThis.fetch("https://gateway.example/v1/chat", {
       headers: { authorization: "Bearer x" },
@@ -58,6 +58,7 @@ test("matching URL gets UA rewrite and custom headers", async () => {
     assert.equal(h.get("x-trace"), "t1", "header name/value not trimmed");
     assert.equal(h.get("authorization"), "Bearer x", "existing header clobbered");
     assert.equal(h.get("x-opencode-client"), null, "dynamicIds leaked while disabled");
+    for (const d of disposers.splice(0)) d();
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -67,7 +68,7 @@ test("non-matching URL passes through untouched", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = spyFetch;
   try {
-    const { ctx } = makeDisposerCtx();
+    const { ctx, disposers } = makeDisposerCtx();
     await mod.default.apply(ctx, identityConfig());
     await globalThis.fetch("https://api.other.com/v1", {
       headers: { "user-agent": "original/1" },
@@ -75,6 +76,7 @@ test("non-matching URL passes through untouched", async () => {
     const h = new Headers(lastInit.headers);
     assert.equal(h.get("user-agent"), "original/1");
     assert.equal(h.get("x-app-key"), null);
+    for (const d of disposers.splice(0)) d();
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -131,4 +133,44 @@ test("enabled=false passes everything even with impossible limits", async () => 
   const dt = performance.now() - t0;
   assert.equal(downstream, 2);
   assert.ok(dt < 200, `disabled limiter still throttled (${dt}ms)`);
+});
+
+test("dynamicIds emits well-formed unique ULIDs per request", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = spyFetch;
+  let disposer;
+  try {
+    const { ctx } = (disposer = makeDisposerCtx());
+    await mod.default.apply(
+      ctx,
+      identityConfig({
+        identityRules: [
+          { urlPattern: "gateway.example", dynamicIds: true, enabled: true },
+        ],
+      }),
+    );
+    const sessions = new Set();
+    const requests = new Set();
+    let prevTimePrefix = "";
+    for (let i = 0; i < 500; i++) {
+      await globalThis.fetch("https://gateway.example/v1/chat");
+      const h = new Headers(lastInit.headers);
+      const session = h.get("x-opencode-session");
+      const request = h.get("x-opencode-request");
+      assert.match(session, /^ses_[0-9A-HJKMNP-TV-Z]{26}$/);
+      assert.match(request, /^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
+      sessions.add(session);
+      requests.add(request);
+      // Monotonic 48-bit big-endian timestamp prefix across rapid calls.
+      const timePrefix = session.slice(4, 14);
+      assert.ok(timePrefix >= prevTimePrefix, "ULID time prefix must be monotonic");
+      prevTimePrefix = timePrefix;
+    }
+    assert.equal(sessions.size, 500, "x-opencode-session ids must be unique across rapid calls");
+    assert.equal(requests.size, 500, "x-opencode-request ids must be unique across rapid calls");
+    const { disposers } = disposer;
+    for (const d of disposers.splice(0)) d();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });

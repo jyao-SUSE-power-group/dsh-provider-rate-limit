@@ -659,3 +659,122 @@ test("maxConcurrentRequests=0 allows unlimited concurrency", async () => {
   assert.equal(results.length, 5, "all 5 requests should complete");
   assert.equal(count, 5, "all 5 downstreams should have been called");
 });
+
+test("concurrency slots are granted in strict FIFO order without polling", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    maxConcurrentRequests: 1,
+  }));
+  const mw = hooks["llm/stream"].mw;
+
+  const gates = [];
+  const entered = [];
+  const enter = (id) => (async () => {
+    await drain(mw({ provider: "fifo", model: "m" }, async function* () {
+      entered.push(id);
+      yield {};
+      await new Promise((r) => gates.push(r)); // hold the slot
+      yield {};
+    }));
+  })();
+
+  const a = enter("A");
+  await sleep(10); // let A acquire the only slot
+  const b = enter("B");
+  await sleep(10);
+  const c = enter("C");
+  await sleep(10);
+  assert.deepEqual(entered, ["A"], "later requests must queue behind the slot holder");
+
+  // Release A, then B, in order; each release must admit exactly one waiter.
+  gates.shift()();
+  await a;
+  await sleep(10);
+  assert.deepEqual(entered, ["A", "B"], "release must grant the queue head (B)");
+  gates.shift()();
+  await b;
+  await sleep(10);
+  assert.deepEqual(entered, ["A", "B", "C"], "release must grant the next waiter (C)");
+  gates.shift()();
+  await c;
+  assert.deepEqual(entered, ["A", "B", "C"]);
+});
+
+test("aborted concurrency waiter leaves the queue without leaking slots", async () => {
+  const ctx = makeHooksCtx();
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    maxConcurrentRequests: 1,
+  }));
+  const mw = hooks["llm/stream"].mw;
+
+  let releaseHeld;
+  const held = new Promise((r) => { releaseHeld = r; });
+  let calls = 0;
+  const holdNext = async function* () {
+    calls += 1;
+    yield {};
+    await held;
+    yield {};
+  };
+
+  const holder = drain(mw({ provider: "ab", model: "m" }, holdNext));
+  await sleep(10);
+
+  // Two waiters queue behind the holder; the first aborts, the second survives.
+  const acB = new AbortController();
+  const waiterB = drain(mw({ provider: "ab", model: "m", signal: acB.signal }, async function* () {
+    calls += 1;
+    yield {};
+  }));
+  await sleep(10);
+  acB.abort();
+  await waiterB;
+
+  const waiterC = drain(mw({ provider: "ab", model: "m" }, async function* () {
+    calls += 1;
+    yield {};
+  }));
+  await sleep(10);
+
+  // Releasing the holder must admit C (the surviving FIFO head) exactly once,
+  // while the aborted waiter B never reaches downstream.
+  releaseHeld();
+  await holder;
+  await waiterC;
+  assert.equal(calls, 2, "holder and surviving waiter reach downstream; aborted waiter does not");
+});
+
+test("settings install works on a legacy provider without installSection", async () => {
+  const ctx = makeHooksCtx({}, { withLegacyProvider: true });
+  const hooks = ctx.hooks;
+  await mod.default.apply(ctx, baseConfig({
+    requestsPerMinute: 0,
+    burst: 1,
+    mode: "wait",
+    maxWaitMs: 60_000,
+    models: [{ provider: "legacy", model: "", requestsPerMinute: 60, burst: 1 }],
+  }));
+  const mw = hooks["llm/stream"].mw;
+
+  // The per-route rule from the base config must be effective on the legacy
+  // fallback path too (scope.get() feeds the source thunk).
+  const t0 = performance.now();
+  await drain(mw({ provider: "legacy", model: "m" }, async function* () { yield {}; }));
+  const dtFirst = performance.now() - t0;
+  assert.ok(dtFirst < 200, `burst pass took ${dtFirst}ms`);
+
+  const t1 = performance.now();
+  await drain(mw({ provider: "legacy", model: "m" }, async function* () { yield {}; }));
+  const dtSecond = performance.now() - t1;
+  assert.ok(dtSecond >= 900, `route rule ignored on legacy settings provider (${dtSecond}ms)`);
+});

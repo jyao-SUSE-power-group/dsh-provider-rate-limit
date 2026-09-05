@@ -11,7 +11,7 @@ export async function loadPlugin() {
 }
 
 /** Collect middleware registrations: event -> { mw, opts }. */
-export function makeHooksCtx(extra = {}) {
+export function makeHooksCtx(extra = {}, { withLegacyProvider = false } = {}) {
   const hooks = {};
   return {
     hooks,
@@ -22,18 +22,33 @@ export function makeHooksCtx(extra = {}) {
       return undefined;
     },
     inject(deps, cb) {
-      // Emulate a real cordis settings service so installSettingsSection's
-      // initial onChange() fires, building the route rules map from the config
-      // passed to apply(). In production DSH the host provides this; the test
-      // fakes it so per-route (models) rules take effect immediately.
+      // Emulate a real cordis settings provider so the plugin's install path
+      // fires its initial onChange(), building the route rules map from the
+      // config passed to apply(). In production DSH the host provides this;
+      // the test fakes it so per-route (models) rules take effect immediately.
+      // `withLegacyProvider` forces the pre-0.1.2-alpha.2 fallback path (no
+      // installSection method, only register) for compatibility coverage.
       if (deps && deps.includes("settings")) {
-        const scope = { value: null, get() { return this.value; }, watch() {} };
+        const scope = {
+          value: null,
+          watchers: [],
+          get() { return this.value; },
+          watch(cb) { this.watchers.push(cb); },
+        };
         const settings = {
           register(_ns, _schema, opts) {
             scope.value = opts.base;
             return scope;
           },
         };
+        if (!withLegacyProvider) {
+          settings.installSection = (_owner, _ns, _schema, entry, hooks) => {
+            settings.register(_ns, _schema, { base: entry });
+            hooks.setSource(() => scope.get());
+            hooks.onChange();
+            scope.watch(() => hooks.onChange());
+          };
+        }
         cb({ settings, effect: (fn) => { const r = fn(); if (typeof r === "function") r.disposer = true; } });
       }
     },
