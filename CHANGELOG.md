@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SSE push endpoint `/api/provider-rate-limit.events`: streams a fresh stats snapshot on every counter change with a 15 s heartbeat, replacing 5 s client polling. Client falls back to a 30 s poll only if the stream drops.
 
 ### Changed
+- **DSH 0.1.5-rc.1 compatibility** (peer ranges `>=0.1.2-alpha.2 || >=0.1.5-0`):
+  - The 0.1.5 runtime carries no breaking API change for this plugin: `SettingsProvider#installSection(owner, ns, schema, entry, hooks)`, `describe`/`replace`/`writable`, the `llm/stream` waterfall, `LlmFailure.providerRetryAfterMs`, and `@deepseek-ai/dsh-client-store`'s `createSnapshotStore` are unchanged. Verified by static diff against the 0.1.5-rc.1 tarballs and a smoke check against a real `SettingsProvider@0.1.5-rc.1`.
+  - Peer ranges now cover two prerelease lines. The previous `>=0.1.2-alpha.2` bound silently excluded `0.1.5-rc.1`: node-semver admits a prerelease only when a comparator shares its exact `major.minor.patch` tuple, so a range anchored at `0.1.2` can never match a `0.1.5-*` candidate.
+  - `pnpm-workspace.yaml` exempts the first-party `@deepseek-ai/*` scope from the environment's 24 h `minimumReleaseAge` supply-chain cooldown, so the freshly published `-rc` line is installable. The age gate still applies to every third-party package.
 - **DSH 0.1.2-rc.1 compatibility** (`@deepseek-ai/dsh-settings >=0.1.2-alpha.2`):
   - The module-level `installSettingsSection` export was removed upstream; importing it crashed the whole plugin at load time. The plugin now installs its settings section through `SettingsProvider#installSection` and reimplements the identical wiring for older providers, so it loads on both generations.
   - Peer dependencies retargeted to the 0.1.2-rc.1 ecosystem (`cordis ^4.0.2`, `schemastery >=3.18.2`, `dsh-llm`/`dsh-settings >=0.1.2-alpha.2` — the previous `^0.1.0-rc.6` range never satisfied 0.1.2 prereleases under strict semver).

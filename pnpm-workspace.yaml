@@ -4,3 +4,9 @@ allowBuilds:
   koffi: false
   node-pty: false
   protobufjs: false
+
+# DSH publishes every release under the `next` dist-tag; a fresh `-rc` is
+# younger than the environment's 24 h supply-chain cooldown, so first-party
+# packages must bypass the release-age gate to be installable at all.
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/*'
