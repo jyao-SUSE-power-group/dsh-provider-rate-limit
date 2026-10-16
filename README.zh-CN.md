@@ -64,7 +64,7 @@ cd ~/.dsh/plugins/dsh-provider-rate-limit && pnpm install --prod
 
 - `urlPattern` —— 对请求 URL 做子串匹配
 - `userAgent` —— 替换后的 `User-Agent`
-- `dynamicIds` —— 追加每次请求随机的 `x-opencode-client/project/session/request` 头组（调用方已提供的 `x-opencode-session` 会被保留、不覆盖）
+- `dynamicIds` —— 发送 OpenCode v2 身份头组：`x-opencode-client`（`cli`）、`x-opencode-project`（`prj_…`），以及规范会话 `ses_…`（12 位反位时间戳十六进制 + 14 位 Base62），并同步到 `x-session-affinity` 与 `X-Session-Id`。会话按对话只生成一次；调用方提供的规范会话会保留，非规范会话会被替换为规范值；不再发送 `x-opencode-request`。
 - `headers` —— 任意静态请求头（`Name: Value`），最后应用，因此可以覆盖上面所有项
 
 fetch 补丁带引用计数、干净卸载：插件停用时恰好恢复原生 `fetch` 一次；期间叠在我们之上的其他补丁不会被破坏。

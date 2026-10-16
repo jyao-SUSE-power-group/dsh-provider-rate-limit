@@ -135,7 +135,11 @@ test("enabled=false passes everything even with impossible limits", async () => 
   assert.ok(dt < 200, `disabled limiter still throttled (${dt}ms)`);
 });
 
-test("dynamicIds emits well-formed unique ULIDs per request", async () => {
+// The canonical shape the free lane accepts: `ses_` + 12 lowercase hex
+// (bit-inverted real-ms timestamp) + 14 Base62.
+const CANONICAL_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+
+async function withIdentityPatch(fn) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = spyFetch;
   let disposer;
@@ -149,60 +153,84 @@ test("dynamicIds emits well-formed unique ULIDs per request", async () => {
         ],
       }),
     );
-    const sessions = new Set();
-    const requests = new Set();
-    let prevTimePrefix = "";
-    for (let i = 0; i < 500; i++) {
-      await globalThis.fetch("https://gateway.example/v1/chat");
-      const h = new Headers(lastInit.headers);
-      const session = h.get("x-opencode-session");
-      const request = h.get("x-opencode-request");
-      assert.match(session, /^ses_[0-9A-HJKMNP-TV-Z]{26}$/);
-      assert.match(request, /^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
-      sessions.add(session);
-      requests.add(request);
-      // Monotonic 48-bit big-endian timestamp prefix across rapid calls.
-      const timePrefix = session.slice(4, 14);
-      assert.ok(timePrefix >= prevTimePrefix, "ULID time prefix must be monotonic");
-      prevTimePrefix = timePrefix;
-    }
-    assert.equal(sessions.size, 500, "x-opencode-session ids must be unique across rapid calls");
-    assert.equal(requests.size, 500, "x-opencode-request ids must be unique across rapid calls");
+    await fn();
     const { disposers } = disposer;
     for (const d of disposers.splice(0)) d();
   } finally {
     globalThis.fetch = realFetch;
   }
+}
+
+function post(url, init) {
+  return globalThis.fetch(url, { method: "POST", ...init });
+}
+
+test("dynamicIds emits the OpenCode v2 identity set", async () => {
+  await withIdentityPatch(async () => {
+    const body = JSON.stringify({ messages: [{ role: "user", content: "hello v2" }] });
+    await post("https://gateway.example/v1/chat", { body });
+    const h = new Headers(lastInit.headers);
+    const session = h.get("x-opencode-session");
+    assert.match(session, CANONICAL_RE, "session must be canonical");
+    assert.equal(session.slice(13, 16), "ffe", "clock half uses the upstream counter-1 encoding");
+    assert.equal(h.get("x-session-affinity"), session, "affinity mirrors the session");
+    assert.equal(h.get("X-Session-Id"), session, "X-Session-Id mirrors the session");
+    assert.equal(h.get("x-opencode-client"), "cli");
+    assert.match(h.get("x-opencode-project"), /^prj_[0-9a-f]{24}$/);
+    assert.equal(h.get("x-opencode-request"), null, "v2 does not send x-opencode-request");
+  });
 });
 
-test("dynamicIds preserves a caller-supplied x-opencode-session", async () => {
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = spyFetch;
-  let disposer;
-  try {
-    const { ctx } = (disposer = makeDisposerCtx());
-    await mod.default.apply(
-      ctx,
-      identityConfig({
-        identityRules: [
-          { urlPattern: "gateway.example", dynamicIds: true, enabled: true },
-        ],
-      }),
-    );
+test("dynamicIds mints one session per conversation, not per request", async () => {
+  await withIdentityPatch(async () => {
+    const sessionOf = async (body) => {
+      await post("https://gateway.example/v1/chat", { body });
+      return new Headers(lastInit.headers).get("x-opencode-session");
+    };
+    const a = JSON.stringify({ messages: [{ role: "user", content: "conversation A" }] });
+    // Same first user turn, longer history — must reuse the id.
+    const aLonger = JSON.stringify({
+      messages: [
+        { role: "user", content: "conversation A" },
+        { role: "assistant", content: "hi" },
+        { role: "user", content: "follow up" },
+      ],
+    });
+    const b = JSON.stringify({ messages: [{ role: "user", content: "conversation B" }] });
+    assert.equal(await sessionOf(a), await sessionOf(aLonger), "a conversation reuses its session");
+    assert.notEqual(await sessionOf(a), await sessionOf(b), "distinct conversations must not collide");
+  });
+});
+
+test("dynamicIds preserves a caller-supplied canonical session", async () => {
+  await withIdentityPatch(async () => {
     // Official clients (and the opencode2dsh adapter) already carry a canonical
     // session; the Zen free lane 403s any other shape, so ours must not clobber it.
     const canonical = "ses_1a2b3c4d5e6fABCDEFGHIJKLMN";
-    await globalThis.fetch("https://gateway.example/v1/chat", {
+    await post("https://gateway.example/v1/chat", {
       headers: { "x-opencode-session": canonical },
     });
     const h = new Headers(lastInit.headers);
     assert.equal(h.get("x-opencode-session"), canonical, "caller session must survive the patch");
     // The rest of the identity set is still filled in.
+    assert.equal(h.get("x-session-affinity"), canonical);
+    assert.equal(h.get("X-Session-Id"), canonical);
     assert.equal(h.get("x-opencode-client"), "cli");
-    assert.match(h.get("x-opencode-request"), /^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
-    const { disposers } = disposer;
-    for (const d of disposers.splice(0)) d();
-  } finally {
-    globalThis.fetch = realFetch;
-  }
+  });
+});
+
+test("dynamicIds canonicalizes a non-canonical caller session", async () => {
+  await withIdentityPatch(async () => {
+    // A foreign/legacy client session (here a plain ULID) would 403 the free
+    // lane, so it is replaced by a canonical id rather than preserved.
+    const notCanonical = "ses_01JD5Z3K8Q9Y2M4N6P7R8S9T0V";
+    await post("https://gateway.example/v1/chat", {
+      headers: { "x-opencode-session": notCanonical },
+    });
+    const h = new Headers(lastInit.headers);
+    const session = h.get("x-opencode-session");
+    assert.match(session, CANONICAL_RE);
+    assert.notEqual(session, notCanonical, "a non-canonical session must be replaced");
+    assert.equal(h.get("x-session-affinity"), session);
+  });
 });

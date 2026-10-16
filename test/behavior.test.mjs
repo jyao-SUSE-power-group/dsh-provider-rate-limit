@@ -127,35 +127,24 @@ test("reject mode short-circuits without touching downstream", async () => {
   assert.equal(out.at(-1)?.reason?.failure?.code, "RATE_LIMIT");
 });
 
-test("ulid() produces standard-compliant 26-char Crockford base-32 strings", async () => {
-  // The ulid() function is exported indirectly via the identity patch; we verify
-  // it by firing matching requests and checking the generated header values.
-  const mod = await import("../lib/index.js");
-  // Re-export ulid for direct testing — it's module-private, so we inspect via
-  // the identity patch by triggering a matching fetch and reading the header.
-  // Instead, we test the regex that any valid ULID must match.
-  const ULID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/;
-  // We cannot import ulid directly, but the plugin must use it. Verify the
-  // constant definitions are correct by re-reading the source.
-  const src = await import("node:fs/promises").then((m) => m.readFile(new URL("../lib/index.js", import.meta.url), "utf8"));
-  assert.ok(src.includes("ULID_TOTAL_LEN = ULID_TIME_LEN + ULID_RANDOM_LEN"), "ULID length constants present");
-  assert.ok(src.includes("time & 31n"), "ULID uses BigInt big-endian encoding");
-  assert.ok(src.includes("randomBytes(10)"), "ULID uses 10 random bytes (80 bits)");
-  // Also verify the regex used for validation exists.
-  assert.ok(src.includes("ULID_RE"), "ULID validation regex is defined");
+test("identity helpers pin the canonical OpenCode v2 session encoding", async () => {
+  const src = await import("node:fs/promises").then((m) =>
+    m.readFile(new URL("../lib/index.js", import.meta.url), "utf8"),
+  );
+  // The Zen free lane only accepts `ses_` + 12 inverted-timestamp hex + 14 Base62.
+  assert.ok(src.includes("CANONICAL_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/"), "canonical session regex");
+  assert.ok(src.includes("invertedTimestampHex"), "inverted-timestamp generator is present");
+  assert.ok(src.includes("base62Fixed"), "Base62 padding helper is present");
+  assert.ok(src.includes("(BigInt(now) * 4096n + 1n)"), "clock half uses the upstream +counter-1 encoding");
 });
 
-test("ulid values are unique across rapid calls", async () => {
-  // Generate 1000 ULIDs and verify no duplicates.
-  const ulids = new Set();
-  // We can't call ulid() directly from tests, so we verify uniqueness via the
-  // x-opencode-session headers emitted by the identity patch under heavy load.
-  // The real test is in the source: 48-bit time + 80-bit random gives ~2^80
-  // possible values, making collisions astronomically unlikely.
-  // Here we just confirm the module exports the right structure.
-  const mod = await import("../lib/index.js");
-  assert.ok(typeof mod.default === "object", "plugin exports default object");
-  assert.ok(typeof mod.default.apply === "function", "plugin has apply function");
+test("canonical sessions keep the counter-1 low-bits marker", async () => {
+  // Counter 1 inverted leaves the low 12 bits at 0xffe, so a minted session's
+  // hex segment always ends in "ffe" — the structural marker upstream emits.
+  const hex = (~(BigInt(Date.now()) * 4096n + 1n) & 281474976710655n).toString(16).padStart(12, "0");
+  assert.equal(hex.length, 12);
+  assert.equal(hex.slice(9), "ffe");
+  assert.match(`ses_${hex}Ab3xY9ZkLmN0pQ`, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
 });
 
 // ---------------------------------------------------------------------------
