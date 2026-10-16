@@ -68,7 +68,7 @@ Some free-tier gateways (e.g. OpenCode Zen) reject clients whose requests don't 
 
 - `urlPattern` — substring match against the request URL
 - `userAgent` — replacement `User-Agent`
-- `dynamicIds` — adds the per-request `x-opencode-client/project/session/request` header set
+- `dynamicIds` — adds the per-request `x-opencode-client/project/session/request` header set (a caller-supplied `x-opencode-session` is left untouched)
 - `headers` — arbitrary static headers (`Name: Value` pairs), applied last so they can override everything above
 
 The fetch patch is ref-counted and unwinds cleanly: when the plugin deactivates, native `fetch` is restored exactly once, and a patch layered above ours in the meantime is never clobbered.

@@ -174,3 +174,35 @@ test("dynamicIds emits well-formed unique ULIDs per request", async () => {
     globalThis.fetch = realFetch;
   }
 });
+
+test("dynamicIds preserves a caller-supplied x-opencode-session", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = spyFetch;
+  let disposer;
+  try {
+    const { ctx } = (disposer = makeDisposerCtx());
+    await mod.default.apply(
+      ctx,
+      identityConfig({
+        identityRules: [
+          { urlPattern: "gateway.example", dynamicIds: true, enabled: true },
+        ],
+      }),
+    );
+    // Official clients (and the opencode2dsh adapter) already carry a canonical
+    // session; the Zen free lane 403s any other shape, so ours must not clobber it.
+    const canonical = "ses_1a2b3c4d5e6fABCDEFGHIJKLMN";
+    await globalThis.fetch("https://gateway.example/v1/chat", {
+      headers: { "x-opencode-session": canonical },
+    });
+    const h = new Headers(lastInit.headers);
+    assert.equal(h.get("x-opencode-session"), canonical, "caller session must survive the patch");
+    // The rest of the identity set is still filled in.
+    assert.equal(h.get("x-opencode-client"), "cli");
+    assert.match(h.get("x-opencode-request"), /^msg_[0-9A-HJKMNP-TV-Z]{26}$/);
+    const { disposers } = disposer;
+    for (const d of disposers.splice(0)) d();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
